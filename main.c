@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <poll.h>
 #include <unistd.h>
+#include <signal.h>
 
 #define BUFFER_SIZE 1024
 #define MAX_CLI 3
