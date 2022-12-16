@@ -5,9 +5,10 @@
 #include <sys/socket.h>
 #include <poll.h>
 #include <unistd.h>
+#include <signal.h>
 
 #define BUFFER_SIZE 1024
-#define MAX_CLI 3
+#define MAX_CLI 1024
 #define PORT 8081
 
 void ipTranslate (uint32_t ip, char * arr); // Translate ip address form net uint32_t to char *
@@ -33,6 +34,8 @@ int main() {
     char cli_ip[16];
     char fileNameForClient[256];
 
+    memset(use,0,sizeof(use)); // Set array to 0
+
 
     // Creating socket file descriptor
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -42,6 +45,7 @@ int main() {
         printf("Socket created.\n");
     }
 
+    // Adding server to clients
     use[0] = 1;
     clients[0].fd = sock;
     clients[0].events = POLLIN;
@@ -84,7 +88,7 @@ int main() {
                         // New connection handling
                         int newConnection = accept(sock, (struct sockaddr *) &address,  &address_size);
                         if (newConnection < 0) {
-                            perror("listen");
+                            perror("accept");
                         } else {
                             for(int j = 1; j < MAX_CLI; j++) {
                                 if (!use[j]) {
@@ -98,8 +102,10 @@ int main() {
                                     break;
                                 }
                                 // If server can't handle more clients
-                                if (j==MAX_CLI-1) {
+                                if (j == MAX_CLI - 1) {
+                                    send(newConnection,"Server is overloaded",21,0);
                                     close(newConnection);
+
                                 }
                             }
                         }
@@ -115,6 +121,7 @@ int main() {
                                         clients[i].events = POLLIN;
                                         file[i] = fopen(ip[i],"wb");
                                         if (file[i] == NULL) {
+                                            send(clients[i].fd,"File error.",12,0);
                                             state[i] = 4;
                                         } else {
                                             state[i] = 2;
@@ -125,7 +132,7 @@ int main() {
                                         fileName[i] = fileNameForClient;
                                         file[i] = fopen(fileName[i],"rb");
                                         if (file[i] == NULL) {
-                                            printf("Open file error.\n");
+                                            send(clients[i].fd,"File error.",12,0);
                                             state[i] = 4;
                                         } else {
                                             clients[i].events = POLLOUT;
