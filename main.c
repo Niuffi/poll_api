@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -11,7 +12,6 @@
 #define MAX_CLI 1024
 #define PORT 8081
 
-void ipTranslate (uint32_t ip, char * arr); // Translate ip address form net uint32_t to char *
 void splitHeader (char * header, int header_size, char * fileName); // Splitting header by space to get filename
 
 int main() {
@@ -33,6 +33,7 @@ int main() {
     char * fileName[MAX_CLI];
     char cli_ip[16];
     char fileNameForClient[256];
+    int newConnection;
 
     memset(use,0,sizeof(use)); // Set array to 0
 
@@ -40,7 +41,7 @@ int main() {
     // Creating socket file descriptor
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("socket failed");
-        exit(EXIT_FAILURE);
+        return 1;
     } else {
         printf("Socket created.\n");
     }
@@ -54,7 +55,7 @@ int main() {
     // Forcefully attaching socket to the port 8080
     if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR , &opt, sizeof(opt))) {
         perror("setsockopt");
-        exit(EXIT_FAILURE);
+        return 1;
     } else {
         printf("Socket attached.\n");
     }
@@ -67,7 +68,7 @@ int main() {
     // Forcefully attaching socket to the PORT
     if (bind(sock, (struct sockaddr *) &address, address_size) < 0) {
         perror("bind failed");
-        exit(EXIT_FAILURE);
+        return 1;
     } else {
         printf("Socket bound.\n");
     }
@@ -75,10 +76,12 @@ int main() {
     // Start listening
     if (listen(sock, 3) < 0) {
         perror("listen");
-        exit(EXIT_FAILURE);
+        return 1;
     } else {
         printf("Listening started.\n");
     }
+
+
 
     while (1) {
         if (poll(&clients[0], sizeof(clients)/sizeof(clients[0]) , -1)) {
@@ -86,7 +89,7 @@ int main() {
                 if (clients[i].revents & POLLIN || clients[i].revents & POLLOUT) {
                     if (i == 0) {
                         // New connection handling
-                        int newConnection = accept(sock, (struct sockaddr *) &address,  &address_size);
+                        newConnection = accept(sock, (struct sockaddr *) &address,  &address_size);
                         if (newConnection < 0) {
                             perror("accept");
                         } else {
@@ -96,14 +99,14 @@ int main() {
                                     state[j] = 1;
                                     clients[j].fd = newConnection;
                                     clients[j].events = POLLIN;
-                                    ipTranslate(address.sin_addr.s_addr, (char *) &cli_ip);
+                                    inet_ntop(AF_INET, &address.sin_addr.s_addr, cli_ip, sizeof(cli_ip));
                                     printf("New connection from %s.\n", cli_ip);
                                     ip[j] = cli_ip;
                                     break;
                                 }
                                 // If server can't handle more clients
                                 if (j == MAX_CLI - 1) {
-                                    send(newConnection,"Server is overloaded",21,0);
+                                    send(newConnection, "Server is overloaded", 21, 0);
                                     close(newConnection);
 
                                 }
@@ -113,13 +116,15 @@ int main() {
                         switch (state[i]) {
                             case 1: // Reading header
                                 memset(buffer,'\0',BUFFER_SIZE);
-                                received = recv(clients[i].fd, buffer,  BUFFER_SIZE, 0);
+                                received = recv(clients[i].fd, buffer, BUFFER_SIZE, 0);
                                 if (received < 0) { //recv() error
                                     state[i] = 4;
                                 } else {
                                     if (buffer[0] == 'u') {
                                         clients[i].events = POLLIN;
-                                        file[i] = fopen(ip[i],"wb");
+                                        splitHeader(buffer, MAX_CLI, (char *) &fileNameForClient);
+                                        fileName[i] = fileNameForClient;
+                                        file[i] = fopen(fileName[i],"wb");
                                         if (file[i] == NULL) {
                                             send(clients[i].fd,"File error.",12,0);
                                             state[i] = 4;
@@ -186,15 +191,8 @@ int main() {
     }
 }
 
-void ipTranslate(uint32_t ip, char * arr) {
-    uint32_t octet[4];
-    for (int i = 0; i < 4; i++) {
-        octet[i] = (ip >> (i * 8))%256;
-    }
-    sprintf(arr, "%d.%d.%d.%d", octet[0],octet[1],octet[2],octet[3]);
-}
 
-void splitHeader(char * header, int header_size, char * fileName){
+void splitHeader(char * header, int header_size, char * fileName) {
     int afterSpace = 0;
     for (int i = 0; i < header_size && header[i] != '\0'; i++) {
         if (header[i] == ' ') {
@@ -210,6 +208,5 @@ void splitHeader(char * header, int header_size, char * fileName){
         }
 
     }
-
 }
 
