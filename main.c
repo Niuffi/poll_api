@@ -9,10 +9,17 @@
 #include <signal.h>
 
 #define BUFFER_SIZE 1024
-#define MAX_CLI 1024
+#define MAX_CLI 3
 #define PORT 8081
 
-void splitHeader (char * header, int header_size, char * fileName); // Splitting header by space to get filename
+// Splitting header by space to get filename
+void splitHeader(char *header, int header_size, char *fileName);
+
+// get number of active clients
+int getClientsNumber(int *use);
+
+// putting active clients on begging of arrays
+void sort(int *use, struct pollfd *clients[], int *state, FILE **file, int *n, char **ip, char **fileName);
 
 int main() {
 
@@ -27,15 +34,16 @@ int main() {
     struct pollfd clients[MAX_CLI];
     int use[MAX_CLI];
     int state[MAX_CLI];
-    FILE * file[MAX_CLI];
+    FILE *file[MAX_CLI];
     int n[MAX_CLI];
-    char * ip[MAX_CLI];
-    char * fileName[MAX_CLI];
+    char *ip[MAX_CLI];
+    char *fileName[MAX_CLI];
     char cli_ip[16];
     char fileNameForClient[256];
     int newConnection;
 
-    memset(use,0,sizeof(use)); // Set array to 0
+    // Set array to 0
+    memset(use, 0, sizeof(use));
 
 
     // Creating socket file descriptor
@@ -53,7 +61,7 @@ int main() {
 
 
     // Forcefully attaching socket to the port 8080
-    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR , &opt, sizeof(opt))) {
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
         perror("setsockopt");
         return 1;
     } else {
@@ -82,18 +90,21 @@ int main() {
     }
 
 
-
     while (1) {
-        if (poll(&clients[0], sizeof(clients)/sizeof(clients[0]) , -1)) {
+        // put active clients on top of arrays
+        sort(use, (struct pollfd **) clients, state, file, n, ip, fileName);
+
+        if (poll(&clients[0], getClientsNumber(use), -1)) {
             for (int i = 0; i < MAX_CLI; i++) {
                 if (clients[i].revents & POLLIN || clients[i].revents & POLLOUT) {
                     if (i == 0) {
                         // New connection handling
-                        newConnection = accept(sock, (struct sockaddr *) &address,  &address_size);
+                        newConnection = accept(sock, (struct sockaddr *) &address, &address_size);
                         if (newConnection < 0) {
                             perror("accept");
                         } else {
-                            for(int j = 1; j < MAX_CLI; j++) {
+                            // Looking for place for a new client
+                            for (int j = 1; j < MAX_CLI; j++) {
                                 if (!use[j]) {
                                     use[j] = 1;
                                     state[j] = 1;
@@ -114,75 +125,98 @@ int main() {
                         }
                     } else {
                         switch (state[i]) {
-                            case 1: // Reading header
-                                memset(buffer,'\0',BUFFER_SIZE);
-                                received = recv(clients[i].fd, buffer, BUFFER_SIZE, 0);
-                                if (received < 0) { //recv() error
-                                    state[i] = 4;
-                                } else {
-                                    if (buffer[0] == 'u') {
-                                        clients[i].events = POLLIN;
-                                        splitHeader(buffer, MAX_CLI, (char *) &fileNameForClient);
-                                        fileName[i] = fileNameForClient;
-                                        file[i] = fopen(fileName[i],"wb");
-                                        if (file[i] == NULL) {
-                                            send(clients[i].fd,"File error.",12,0);
-                                            state[i] = 4;
-                                        } else {
-                                            state[i] = 2;
-                                        }
-                                    } else if (buffer[0] == 'd') {
-                                        state[i] = 3;
-                                        splitHeader(buffer, MAX_CLI, (char *) &fileNameForClient);
-                                        fileName[i] = fileNameForClient;
-                                        file[i] = fopen(fileName[i],"rb");
-                                        if (file[i] == NULL) {
-                                            send(clients[i].fd,"File error.",12,0);
-                                            state[i] = 4;
-                                        } else {
-                                            clients[i].events = POLLOUT;
-                                        }
+                            // Reading header
+                            case 1:
+                                if (clients[i].revents & POLLIN) {
+                                    memset(buffer, '\0', BUFFER_SIZE);
+                                    received = recv(clients[i].fd, buffer, BUFFER_SIZE, 0);
+
+                                    //recv() error or connection is closed
+                                    if (received < 0) {
+                                        state[i] = 4;
                                     } else {
-                                        send(clients[i].fd, "Wrong header", 12, 0);
+                                        // client request = upload
+                                        if (buffer[0] == 'u') {
+                                            clients[i].events = POLLIN;
+                                            splitHeader(buffer, MAX_CLI, (char *) &fileNameForClient);
+                                            // save filename
+                                            fileName[i] = fileNameForClient;
+                                            file[i] = fopen(fileName[i], "wb");
+
+                                            // check if file opened correctly
+                                            // if open file error
+                                            if (file[i] == NULL) {
+                                                send(clients[i].fd, "File error.", 12, 0);
+                                                state[i] = 4;
+                                            } else {
+                                                // file opened correctly
+                                                state[i] = 2;
+                                            }
+                                        } else if (buffer[0] == 'd') {
+                                            // client request = download
+                                            state[i] = 3;
+                                            splitHeader(buffer, MAX_CLI, (char *) &fileNameForClient);
+                                            fileName[i] = fileNameForClient;
+                                            file[i] = fopen(fileName[i], "rb");
+                                            // check if file opened correctly
+                                            // if open file error
+                                            if (file[i] == NULL) {
+                                                send(clients[i].fd, "File error.", 12, 0);
+                                                state[i] = 4;
+                                            } else {
+                                                // file opened correctly
+                                                clients[i].events = POLLOUT;
+                                            }
+                                        } else {
+                                            send(clients[i].fd, "Wrong header", 12, 0);
+                                        }
                                     }
                                 }
+
                                 break;
 
                             case 2: //Upload request
-                                memset(buffer,'\0',BUFFER_SIZE);
-                                received = recv(clients[i].fd, buffer,  BUFFER_SIZE, 0);
-                                if (received > 0) {
-                                    fwrite(buffer , 1 , received , file[i]);
-                                    clients[i].events = POLLIN;
-                                } else if (received == 0) {
-                                    state[i] = 4;
-                                } else { //recv() error
-                                    state[i] = 4;
+                                if (clients[i].revents & POLLOUT) {
+                                    memset(buffer, '\0', BUFFER_SIZE);
+                                    received = recv(clients[i].fd, buffer, BUFFER_SIZE, 0);
+                                    if (received > 0) {
+                                        fwrite(buffer, 1, received, file[i]);
+                                        clients[i].events = POLLIN;
+                                    } else if (received == 0) {
+                                        state[i] = 1;
+                                    } else { //recv() error or connection is closed
+                                        state[i] = 4;
+                                    }
                                 }
                                 break;
 
                             case 3: //Download request
-                                n[i] = fread(buffer, 1, BUFFER_SIZE, file[i]);
-                                if (n[i]) {
-                                    if(send(clients[i].fd, buffer, n[i], 0) < 0) {
-                                        state[i] = 4;
+                                if (clients[i].revents & POLLIN) {
+                                    n[i] = fread(buffer, 1, BUFFER_SIZE, file[i]);
+                                    if (n[i]) {
+                                        if (send(clients[i].fd, buffer, n[i], 0) < 0) {
+                                            state[i] = 4;
+                                        }
+                                        memset(buffer, '\0', BUFFER_SIZE);
+                                        clients[i].events = POLLOUT;
+                                    } else {
+                                        state[i] = 1;
                                     }
-                                    memset(buffer,'\0', BUFFER_SIZE);
-                                    clients[i].events = POLLOUT;
-                                } else {
-                                    state[i] = 4;
                                 }
                                 break;
 
                             case 4: //Close connection
+                                clients[i].events = 0;
+                                inet_ntop(AF_INET, &address.sin_addr.s_addr, cli_ip, sizeof(cli_ip));
+                                printf("Close connetion with: %s.\n", cli_ip);
                                 fclose(file[i]);
                                 close(clients[i].fd);
-                                use[i]=0;
-                                state[i]=0;
+                                use[i] = 0;
+                                state[i] = 0;
                                 break;
                         }
                     }
-                }
+                //}
             }
         } else {
             perror("poll");
@@ -192,7 +226,7 @@ int main() {
 }
 
 
-void splitHeader(char * header, int header_size, char * fileName) {
+void splitHeader(char *header, int header_size, char *fileName) {
     int afterSpace = 0;
     for (int i = 0; i < header_size && header[i] != '\0'; i++) {
         if (header[i] == ' ') {
@@ -210,3 +244,61 @@ void splitHeader(char * header, int header_size, char * fileName) {
     }
 }
 
+int getClientsNumber(int *use) {
+    int output = 0;
+    int i = 0;
+    while (use[i] == 1) {
+        output++;
+        i++;
+    }
+    return output;
+}
+
+void sort(int *use, struct pollfd *clients[], int *state, FILE **file, int *n, char **ip, char **fileName) {
+    int i = 1;
+    int j = MAX_CLI - 1;
+
+    int a;
+    struct pollfd *b;
+    char *c;
+    FILE **d;
+
+    for (int j = MAX_CLI; j > 1; j--) {
+        if (use[j] == 1) {
+            for (int i = 1; i < MAX_CLI; i++) {
+                if (use[i] == 0 && i < j) {
+                    a = use[i];
+                    use[i] = use[j];
+                    use[j] = a;
+
+                    b = clients[i];
+                    clients[i] = clients[j];
+                    clients[j] = b;
+
+                    a = state[i];
+                    state[i] = state[j];
+                    state[j] = a;
+
+                    a = n[i];
+                    n[i] = n[j];
+                    n[j] = a;
+
+                    c = ip[i];
+                    ip[i] = ip[j];
+                    ip[j] = c;
+
+                    c = fileName[i];
+                    fileName[i] = fileName[j];
+                    fileName[j] = c;
+
+                    d = (FILE **) file[i];
+                    file[i] = file[j];
+                    file[j] = (FILE *) d;
+
+                    i++;
+                    j--;
+                }
+            }
+        }
+    }
+}
